@@ -5,6 +5,8 @@ from functools import partial
 from urllib.parse import quote
 from openpyxl import load_workbook
 import openpyxl
+import csv
+
 
 # Import a Browser to open the WhatsApp Web
 import webbrowser
@@ -12,18 +14,48 @@ import webbrowser
 
 ### Extras.py
 def corrigir_numero(numero):
-    for caractere in numero:
-        if not caractere.isdigit():
-            numero = numero.replace(caractere, "")
-        if len(numero) == 12:
-            ddd = numero[1:3]
-            numero = numero[3:]
+    if not numero:
+        return ""
 
-        if len(numero) == 9:
-            return f"+55{ddd}{numero}"
+    numero = numero.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
 
-        if len(numero) == 8:
-            f"+55{ddd}9{numero}"
+    if numero.startswith("0"):
+        numero = numero[1:]
+    numero = "+55" + numero
+    return numero
+
+
+def buscar_nome_telefone_novo(arquivo):
+
+    tupla_nomes_telefones = []
+    with open(arquivo, newline="") as csvfile:
+        # Create a CSV reader object
+        csvreader = csv.reader(csvfile, delimiter=",")
+
+        # Process each row in the CSV file
+        for row in csvreader:
+            dia = row[12]
+            nome = row[13]
+            telefone = row[14]
+            celular = row[15]
+
+            try:
+                int(dia)
+            except:
+                continue
+
+            if not (telefone or celular):
+                continue
+
+            if celular:
+                telefone = celular
+
+            telefone = corrigir_numero(telefone)
+
+            primeiro_nome = nome.split(" ")[0].capitalize()
+
+            tupla_nomes_telefones.append((dia, nome, primeiro_nome, telefone))
+    return tupla_nomes_telefones
 
 
 def buscar_nome_telefone(arquivo):
@@ -69,7 +101,7 @@ class FileSelectorWindow(QtWidgets.QWidget):
         ## Set Size
         self.setFixedSize(500, 100)
         ## Set Title
-        self.setWindowTitle("AutoZAP - Selecionar Arquivo")
+        self.setWindowTitle("SakaZap - Selecionar Arquivo")
         ## Set Layout
         self.layout = QtWidgets.QGridLayout(self)
         ## Create Widgets
@@ -92,15 +124,15 @@ class FileSelectorWindow(QtWidgets.QWidget):
 
     def open_file(self):
         file_name, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Selecione o arquivo", "", "Arquivos Excel (*.xlsx)"
+            self, "Selecione o arquivo", "", "Arquivos CSV (*.csv)"
         )
 
-        if file_name.endswith(".xlsx"):
+        if file_name.endswith(".csv"):
             self.text_field.setText(file_name)
             self.info_text.setText(f"Arquivo Carregado com Sucesso!")
             self.file_selected.emit(file_name)
         else:
-            self.info_text.setText("Por Favor Selecione um Arquivo Excel (.xlsx)")
+            self.info_text.setText("Por Favor Selecione um Arquivo CSV (.xlsx)")
 
 
 ### FileSelector.py
@@ -110,7 +142,7 @@ class FileSelectorWindow(QtWidgets.QWidget):
 class UsersTab(QtWidgets.QWidget):
     def __init__(self, arquivo, message):
         super().__init__()
-        tupla_nomes_telefones = buscar_nome_telefone(arquivo)
+        tupla_nomes_telefones = buscar_nome_telefone_novo(arquivo)
         self.mensagem = message
         self.users_checkboxes = []
 
@@ -138,28 +170,36 @@ class UsersTab(QtWidgets.QWidget):
 
     def _gerar_campos_usuarios(self, users, layout):
         for dia, nome, primeiro_nome, telefone in users:
-            if dia != datetime.today().day:
+            if int(dia) != datetime.today().day:
                 continue
 
             user_layout = QtWidgets.QHBoxLayout()
             user_layout.addWidget(QtWidgets.QLabel(nome))
 
-            user_button = QtWidgets.QPushButton("Enviar Mensagem")
-            user_chkbox = QtWidgets.QCheckBox()
-            user_chkbox.setDisabled(True)
+            send_msg_button = QtWidgets.QPushButton("Enviar Mensagem")
+            message_chkbox = QtWidgets.QCheckBox()
+            message_chkbox.setDisabled(True)
+            invalid_number_chkbox = QtWidgets.QCheckBox(
+                "Número Inválido"
+            )  # Nova Checkbox
 
-            user_button.clicked.connect(
+            send_msg_button.clicked.connect(
                 partial(
-                    self.enviar_mensagem, telefone, nome, primeiro_nome, user_chkbox
+                    self.enviar_mensagem, telefone, nome, primeiro_nome, message_chkbox
                 )
             )
 
             user_layout.addStretch()
-            user_layout.addWidget(user_button)
-            user_layout.addWidget(user_chkbox)
+            user_layout.addWidget(send_msg_button)
+            user_layout.addWidget(message_chkbox)
+            user_layout.addWidget(
+                invalid_number_chkbox
+            )  # Adicionar a nova checkbox ao layout
             layout.addLayout(user_layout)
 
-            self.users_checkboxes.append((nome, telefone, user_chkbox))
+            self.users_checkboxes.append(
+                (nome, telefone, message_chkbox, invalid_number_chkbox)
+            )
 
     def enviar_mensagem(self, telefone, nome, primeiro_nome, checkbox):
         texto = (
@@ -182,25 +222,26 @@ class UsersTab(QtWidgets.QWidget):
         )[0]
 
         if filename:
-            # Load the workbook
             workbook = load_workbook("template.xlsx")
-
-            # Select the active sheet
             sheet = workbook.active
 
-            # Write data to the sheet starting from C3, D3, E3
             row = 3
-            for nome, telefone, checkbox in self.users_checkboxes:
-                status = "SIM" if checkbox.isChecked() else "NÃO"
+            for nome, telefone, msg_checkbox, invalid_chkbox in self.users_checkboxes:
+                status = "SIM" if msg_checkbox.isChecked() else "NÃO"
+                invalid_status = (
+                    "Número inválido" if invalid_chkbox.isChecked() else None
+                )
                 dia = datetime.today().day
                 sheet[f"B{row}"] = dia
                 sheet[f"C{row}"] = nome
                 sheet[f"D{row}"] = telefone
                 sheet[f"E{row}"] = status
+                sheet[f"F{row}"] = (
+                    invalid_status  # Adicionar o status de número inválido
+                )
                 sheet[f"G{row}"] = f"{nome[:3]}{telefone[8:11]}{dia}"
                 row += 1
 
-            # Save the workbook
             workbook.save(filename)
 
 
@@ -251,10 +292,10 @@ class Aplicativo(QtWidgets.QMainWindow):
 
     def __init__(self, arquivo):
         super().__init__()
-        self.setWindowTitle("AutoZAP")
+        self.setWindowTitle("SakaZap")
         self.arquivo = arquivo
 
-        self.setFixedSize(500, 400)
+        self.setFixedSize(600, 400)
         texto = self._inicializar_storage()
 
         self.tabWidget = QtWidgets.QTabWidget()
